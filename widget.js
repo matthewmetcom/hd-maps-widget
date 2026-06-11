@@ -155,6 +155,13 @@ function getTimezone(lat, lng) {
 }
 
 function closePopup() {
-  try { ZOHO.CRM.UI.Popup.close(); }
-  catch (e) { console.log('[HDMaps] popup close not available:', e); }
+  try {
+    // Existing record → reload so the updated fields show immediately.
+    // New create form → plain close so the in-progress form is preserved.
+    if (currentEntityId && ZOHO.CRM.UI.Popup.closeReload) {
+      ZOHO.CRM.UI.Popup.closeReload();
+    } else {
+      ZOHO.CRM.UI.Popup.close();
+    }
+  } catch (e) { console.log('[HDMaps] popup close not available:', e); }
 }
