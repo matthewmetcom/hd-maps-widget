@@ -75,7 +75,7 @@ function wireBox(inputId, handler) {
   if (!input || input.__wired) return;
   input.__wired = true;
   var ac = new google.maps.places.Autocomplete(input, {
-    fields: ['formatted_address', 'geometry', 'place_id'],
+    fields: ['name', 'formatted_address', 'geometry', 'place_id'],
   });
   ac.addListener('place_changed', function () {
     var place = ac.getPlace();
@@ -101,12 +101,12 @@ applyBtn.addEventListener('click', function () {
   if (primaryPlace) {
     lat = primaryPlace.geometry.location.lat();
     lng = primaryPlace.geometry.location.lng();
-    record[FIELDS.address] = primaryPlace.formatted_address;
+    record[FIELDS.address] = displayAddress(primaryPlace);
     record[FIELDS.geo]     = lat + ',' + lng;
     record[FIELDS.placeId] = primaryPlace.place_id;
   }
-  if (startPlace)  record[FIELDS.start]  = startPlace.formatted_address;
-  if (finishPlace) record[FIELDS.finish] = finishPlace.formatted_address;
+  if (startPlace)  record[FIELDS.start]  = displayAddress(startPlace);
+  if (finishPlace) record[FIELDS.finish] = displayAddress(finishPlace);
 
   setStatus('Applying…', 'busy');
   applyBtn.disabled = true;
@@ -140,6 +140,19 @@ function populate(record) {
   }
   return ZOHO.CRM.UI.Record.populate(record)
     .then(function (r) { console.log('[HDMaps] populate resp:', r); return r; });
+}
+
+// ─── Build the display address, prepending the venue name if it's a place ─
+// For a named venue Google returns name="The Como Pub" separately from the
+// street address. For a plain address pick, name is just the street part —
+// so we only prepend it when it isn't already inside the formatted address.
+function displayAddress(place) {
+  var name = (place.name || '').trim();
+  var addr = (place.formatted_address || '').trim();
+  if (name && addr && addr.indexOf(name) === -1) {
+    return name + ', ' + addr;
+  }
+  return addr || name;
 }
 
 // ─── Timezone — offline lookup from coordinates (tz.js) ──────────────────
