@@ -32,3 +32,19 @@ h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; color: #334155; }
 .hint { font-size: 11px; color: #94a3b8; margin-top: 2px; }
 .hidden { display: none; }
 .pac-container { z-index: 100000 !important; }
+
+.actions { display: flex; gap: 8px; margin-top: 14px; }
+.btn {
+  padding: 9px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover { background: #f1f5f9; }
+.btn.primary { background: #16B48F; border-color: #16B48F; color: #fff; }
+.btn.primary:hover { background: #129b7b; }
+.btn.primary:disabled { background: #cbd5e1; border-color: #cbd5e1; cursor: not-allowed; }

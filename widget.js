@@ -9,27 +9,46 @@ var FIELDS = {
   finish:   'Finish_Location',
 };
 
-// Standalone Deluge function that returns a timezone id for lat,lng.
 var TZ_FUNCTION = 'hd_get_timezone';
 
-var currentModule   = null;   // 'Deals' or the Events module API name
-var currentEntityId = null;   // record id when opened on a saved record
+var currentModule   = null;
+var currentEntityId = null;
 var mapsReady = false;
 
+// Picked places held in memory — nothing is written until "Apply".
+var primaryPlace = null, startPlace = null, finishPlace = null;
+
 var statusEl = document.getElementById('status');
+var applyBtn = document.getElementById('applyBtn');
+var cancelBtn = document.getElementById('cancelBtn');
+
 function setStatus(msg, cls) {
   statusEl.textContent = msg || '';
   statusEl.className = 'status' + (cls ? ' ' + cls : '');
 }
 
-// ─── Boot: init the Zoho SDK, learn which module we're on ────────────────
+// ─── Boot ─────────────────────────────────────────────────────────────────
 ZOHO.embeddedApp.on('PageLoad', function (data) {
+  console.log('[HDMaps] PageLoad:', data);
   currentModule = data && data.Entity ? data.Entity : null;
   if (data && data.EntityId) {
     currentEntityId = Array.isArray(data.EntityId) ? data.EntityId[0] : data.EntityId;
   }
-  // Show start/finish boxes only on the Event module (it has those fields).
-  if (currentModule && currentModule !== 'Deals') {
+  console.log('[HDMaps] module=', currentModule, 'entityId=', currentEntityId);
+
+  // Dump the real field API names so we can confirm the mapping.
+  if (ZOHO.CRM.META && ZOHO.CRM.META.getFields) {
+    ZOHO.CRM.META.getFields({ Entity: currentModule }).then(function (r) {
+      var fs = (r && r.fields) || [];
+      var relevant = fs
+        .filter(function (f) { return /location|geo|time|place/i.test(f.api_name || ''); })
+        .map(function (f) { return f.api_name; });
+      console.log('[HDMaps] relevant field API names:', relevant);
+    }).catch(function (e) { console.log('[HDMaps] getFields failed:', e); });
+  }
+
+  // Show start/finish only on the Event module.
+  if (currentModule && /event/i.test(currentModule)) {
     document.getElementById('startField').classList.remove('hidden');
     document.getElementById('finishField').classList.remove('hidden');
   }
@@ -38,21 +57,17 @@ ZOHO.embeddedApp.on('PageLoad', function (data) {
 
 ZOHO.embeddedApp.init();
 
-// ─── Google Maps callback (the maps <script> calls this) ─────────────────
-window.__initMaps = function () {
-  mapsReady = true;
-  tryWireAutocomplete();
-};
+// ─── Google Maps callback ─────────────────────────────────────────────────
+window.__initMaps = function () { mapsReady = true; tryWireAutocomplete(); };
 
 function tryWireAutocomplete() {
-  if (!mapsReady) return;                 // wait for Google script
-  if (typeof google === 'undefined') return;
-  wireBox('primaryInput', onPrimaryPicked);
-  if (currentModule && currentModule !== 'Deals') {
-    wireBox('startInput',  function (p) { onSecondaryPicked(p, FIELDS.start); });
-    wireBox('finishInput', function (p) { onSecondaryPicked(p, FIELDS.finish); });
+  if (!mapsReady || typeof google === 'undefined') return;
+  wireBox('primaryInput', function (p) { primaryPlace = p; onPicked(); });
+  if (currentModule && /event/i.test(currentModule)) {
+    wireBox('startInput',  function (p) { startPlace = p;  onPicked(); });
+    wireBox('finishInput', function (p) { finishPlace = p; onPicked(); });
   }
-  setStatus('Ready — start typing an address.', 'busy');
+  setStatus('Start typing an address…', 'busy');
 }
 
 function wireBox(inputId, handler) {
@@ -65,75 +80,91 @@ function wireBox(inputId, handler) {
   ac.addListener('place_changed', function () {
     var place = ac.getPlace();
     if (!place || !place.geometry) {
-      setStatus('No details for that address — pick one from the list.', 'err');
+      setStatus('Pick an address from the dropdown list.', 'err');
       return;
     }
     handler(place);
   });
 }
 
-// ─── Primary location: address + geo + place id + timezone ───────────────
-function onPrimaryPicked(place) {
-  var lat = place.geometry.location.lat();
-  var lng = place.geometry.location.lng();
-  var record = {};
-  record[FIELDS.address] = place.formatted_address;
-  record[FIELDS.geo]     = lat + ',' + lng;
-  record[FIELDS.placeId] = place.place_id;
+function onPicked() {
+  applyBtn.disabled = false;
+  setStatus('Address selected — click “Apply Address” to fill the form.', 'busy');
+}
 
-  setStatus('Looking up timezone…', 'busy');
-  getTimezone(lat, lng).then(function (tz) {
+// ─── Apply button: write everything, then close ───────────────────────────
+applyBtn.addEventListener('click', function () {
+  if (!primaryPlace && !startPlace && !finishPlace) return;
+
+  var record = {};
+  var lat = null, lng = null;
+  if (primaryPlace) {
+    lat = primaryPlace.geometry.location.lat();
+    lng = primaryPlace.geometry.location.lng();
+    record[FIELDS.address] = primaryPlace.formatted_address;
+    record[FIELDS.geo]     = lat + ',' + lng;
+    record[FIELDS.placeId] = primaryPlace.place_id;
+  }
+  if (startPlace)  record[FIELDS.start]  = startPlace.formatted_address;
+  if (finishPlace) record[FIELDS.finish] = finishPlace.formatted_address;
+
+  setStatus('Applying…', 'busy');
+  applyBtn.disabled = true;
+
+  var tzPromise = (lat !== null)
+    ? withTimeout(getTimezone(lat, lng), 8000).catch(function () { return null; })
+    : Promise.resolve(null);
+
+  tzPromise.then(function (tz) {
     if (tz) record[FIELDS.timezone] = tz;
-    return populate(record).then(function () {
-      setStatus('✓ Filled address, coordinates' + (tz ? ', timezone (' + tz + ')' : '') + ' & Place ID.', 'ok');
-    });
-  }).catch(function () {
-    populate(record).then(function () {
-      setStatus('✓ Filled address & coordinates. Timezone lookup failed — set it manually.', 'err');
-    });
+    return populate(record);
+  }).then(function () {
+    setStatus('✓ Applied to the form. Closing…', 'ok');
+    setTimeout(closePopup, 700);
+  }).catch(function (err) {
+    console.error('[HDMaps] apply error:', err);
+    setStatus('Something went wrong — see console (F12).', 'err');
+    applyBtn.disabled = false;
   });
-}
+});
 
-// ─── Secondary (start/finish): address string only ───────────────────────
-function onSecondaryPicked(place, fieldApi) {
-  var record = {};
-  record[fieldApi] = place.formatted_address;
-  populate(record).then(function () {
-    setStatus('✓ Filled ' + fieldApi.replace('_', ' ') + '.', 'ok');
-  });
-}
+cancelBtn.addEventListener('click', closePopup);
 
-// ─── Write values to the record / open form ──────────────────────────────
-// Saved record (Edit / Details) → updateRecord with the id.
-// New create form (no id) → populate the in-progress form.
+// ─── Write to record / form ───────────────────────────────────────────────
 function populate(record) {
+  console.log('[HDMaps] writing:', record, 'entityId=', currentEntityId);
   if (currentEntityId) {
     var apiData = Object.assign({ id: currentEntityId }, record);
-    return ZOHO.CRM.API.updateRecord({
-      Entity: currentModule, APIData: apiData, Trigger: [],
-    }).catch(function (err) {
-      console.error('updateRecord failed', err);
-      setStatus('Could not save to the record — check field API names.', 'err');
-    });
+    return ZOHO.CRM.API.updateRecord({ Entity: currentModule, APIData: apiData, Trigger: [] })
+      .then(function (r) { console.log('[HDMaps] updateRecord resp:', r); return r; });
   }
-  return ZOHO.CRM.UI.Record.populate(record).catch(function (err) {
-    console.error('populate failed', err);
-    setStatus('Could not write to the form — check field API names.', 'err');
-  });
+  return ZOHO.CRM.UI.Record.populate(record)
+    .then(function (r) { console.log('[HDMaps] populate resp:', r); return r; });
 }
 
-// ─── Timezone via the Deluge function (server-side, avoids CORS) ─────────
+// ─── Timezone via Deluge function ─────────────────────────────────────────
 function getTimezone(lat, lng) {
+  console.log('[HDMaps] timezone lookup', lat, lng);
   return ZOHO.CRM.FUNCTION.execute(TZ_FUNCTION, {
     arguments: JSON.stringify({ lat: String(lat), lng: String(lng) }),
   }).then(function (resp) {
+    console.log('[HDMaps] function resp:', resp);
     var out = resp && resp.details ? resp.details.output : null;
     if (!out) return null;
-    try {
-      var parsed = JSON.parse(out);
-      return parsed.timeZoneId || parsed.timezone || out;
-    } catch (e) {
-      return out;
-    }
+    try { var p = JSON.parse(out); return p.timeZoneId || p.timezone || out; }
+    catch (e) { return out; }
   });
+}
+
+function withTimeout(promise, ms) {
+  return new Promise(function (resolve, reject) {
+    var t = setTimeout(function () { reject(new Error('timeout')); }, ms);
+    promise.then(function (v) { clearTimeout(t); resolve(v); },
+                 function (e) { clearTimeout(t); reject(e); });
+  });
+}
+
+function closePopup() {
+  try { ZOHO.CRM.UI.Popup.close(); }
+  catch (e) { console.log('[HDMaps] popup close not available:', e); }
 }
