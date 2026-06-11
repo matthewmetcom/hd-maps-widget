@@ -111,19 +111,19 @@ applyBtn.addEventListener('click', function () {
   setStatus('Applying…', 'busy');
   applyBtn.disabled = true;
 
-  var tzPromise = (lat !== null)
-    ? withTimeout(getTimezone(lat, lng), 8000).catch(function () { return null; })
-    : Promise.resolve(null);
-
-  tzPromise.then(function (tz) {
+  // Timezone is computed offline from the coordinates — instant, no API call.
+  if (lat !== null) {
+    var tz = getTimezone(lat, lng);
     if (tz) record[FIELDS.timezone] = tz;
-    return populate(record);
-  }).then(function () {
+    console.log('[HDMaps] timezone =', tz);
+  }
+
+  populate(record).then(function () {
     setStatus('✓ Applied to the form. Closing…', 'ok');
     setTimeout(closePopup, 700);
   }).catch(function (err) {
     console.error('[HDMaps] apply error:', err);
-    setStatus('Something went wrong — see console (F12).', 'err');
+    setStatus('Write failed — see console (F12).', 'err');
     applyBtn.disabled = false;
   });
 });
@@ -142,26 +142,16 @@ function populate(record) {
     .then(function (r) { console.log('[HDMaps] populate resp:', r); return r; });
 }
 
-// ─── Timezone via Deluge function ─────────────────────────────────────────
+// ─── Timezone — offline lookup from coordinates (tz.js) ──────────────────
 function getTimezone(lat, lng) {
-  console.log('[HDMaps] timezone lookup', lat, lng);
-  return ZOHO.CRM.FUNCTION.execute(TZ_FUNCTION, {
-    arguments: JSON.stringify({ lat: String(lat), lng: String(lng) }),
-  }).then(function (resp) {
-    console.log('[HDMaps] function resp:', resp);
-    var out = resp && resp.details ? resp.details.output : null;
-    if (!out) return null;
-    try { var p = JSON.parse(out); return p.timeZoneId || p.timezone || out; }
-    catch (e) { return out; }
-  });
-}
-
-function withTimeout(promise, ms) {
-  return new Promise(function (resolve, reject) {
-    var t = setTimeout(function () { reject(new Error('timeout')); }, ms);
-    promise.then(function (v) { clearTimeout(t); resolve(v); },
-                 function (e) { clearTimeout(t); reject(e); });
-  });
+  try {
+    if (typeof tzlookup === 'function') return tzlookup(lat, lng);
+    console.warn('[HDMaps] tzlookup not loaded');
+    return null;
+  } catch (e) {
+    console.error('[HDMaps] tzlookup error:', e);
+    return null;
+  }
 }
 
 function closePopup() {

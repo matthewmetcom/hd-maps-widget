@@ -33,6 +33,8 @@
 
   <div id="status" class="status"></div>
 
+  <!-- Offline lat/lng → IANA timezone (no API call needed) -->
+  <script src="tz.js"></script>
   <!-- App logic (external — Zoho's widget CSP blocks inline scripts) -->
   <script src="widget.js"></script>
   <!-- Google Maps + Places. Loads after widget.js so __initMaps is defined. -->
